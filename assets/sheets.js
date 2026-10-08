@@ -32,26 +32,52 @@
     }
     if (!rows.length) return [];
     const headers = rows[0].map(h => h.trim());
-    return rows.slice(1).map(r => Object.fromEntries(headers.map((h,i) => [h, (r[i] ?? "").trim()])));
+    return rows.slice(1).map(r => Object.fromEntries(
+      headers.map((h, i) => [h, (r[i] ?? "").trim()])
+    ));
   }
 
   async function getSheet(name) {
-    const key = name;
     const now = Date.now();
-    const hit = cache.get(key);
+    const hit = cache.get(name);
     if (hit && now - hit.time < (cfg.CACHE_MINUTES || 15) * 60000) return hit.data;
-    const response = await fetch(sheetUrl(name), { cache: "no-store" });
-    if (!response.ok) throw new Error(`Could not load Google Sheet tab: ${name}`);
-    const data = parseCSV(await response.text());
-    cache.set(key, {time: now, data});
+
+    const url = sheetUrl(name);
+    let response;
+    try {
+      response = await fetch(url, { cache: "no-store" });
+    } catch (err) {
+      throw new Error(`Network/CORS error loading "${name}". ${err?.message || err}`);
+    }
+
+    if (!response.ok) {
+      throw new Error(`Google Sheet tab "${name}" returned HTTP ${response.status} ${response.statusText}`);
+    }
+
+    const text = await response.text();
+    if (!text.trim()) throw new Error(`Google Sheet tab "${name}" returned an empty response`);
+
+    const data = parseCSV(text);
+    cache.set(name, { time: now, data });
     return data;
   }
 
   async function loadAll(names) {
     const results = {};
-    await Promise.all(names.map(async n => results[n] = await getSheet(n)));
+    const errors = {};
+
+    await Promise.all(names.map(async name => {
+      try {
+        results[name] = await getSheet(name);
+      } catch (err) {
+        errors[name] = err instanceof Error ? err.message : String(err);
+        console.warn(`[GCI] Failed to load sheet tab "${name}"`, err);
+      }
+    }));
+
+    window.GCI_SHEET_ERRORS = errors;
     return results;
   }
 
-  window.GCI_SHEETS = { getSheet, loadAll };
+  window.GCI_SHEETS = { getSheet, loadAll, sheetUrl };
 })();
